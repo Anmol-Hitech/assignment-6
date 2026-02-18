@@ -24,3 +24,9 @@ class ChangePass(BaseModel):
 
 class ChangeEmail(BaseModel):
     new_email:str
+    otp:int
+class ForgotPass(BaseModel):
+    email:str
+class ResetPass(BaseModel):
+    email:str
+    new_password:str

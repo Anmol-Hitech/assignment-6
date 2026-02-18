@@ -10,4 +10,4 @@ class User(Base):
     is_verified=Column(Boolean,default=False)
     is_Active=Column(Boolean,nullable=False,default=True)
     reset_token=Column(String,nullable=True)
-    reset_token_expiry=Column(DateTime,nullable=True)
+    reset_token_expiry=Column(DateTime(timezone=True),nullable=True)

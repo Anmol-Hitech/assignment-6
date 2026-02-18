@@ -42,3 +42,30 @@ def correct_email(input:str):
         return True
     else:
         return False
+
+def send_reset_instructions(to_email:str,reset_token:str):
+    subject = "Reset Password Instructions"
+    body = f"""
+    Hello,
+ 
+    Your reset token is: {reset_token}
+    This Token Expires in 15 minutes
+    Please use this token to change your password.
+ 
+    Thank you!
+    """
+ 
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_ADDRESS
+    msg["To"] = to_email
+    msg["Subject"] = subject
+ 
+    msg.attach(MIMEText(body, "plain"))
+ 
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    server.starttls()
+    server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+    server.sendmail(EMAIL_ADDRESS, to_email, msg.as_string())
+    server.quit()
+
+# def check_old_email

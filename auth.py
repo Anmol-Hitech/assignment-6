@@ -46,3 +46,11 @@ def get_current_user(
         raise HTTPException(status_code=400,detail="Not found")
     
     return user
+
+def create_reset_token(data:dict):
+    to_encode=data.copy()
+    expire=datetime.now(timezone.utc) + timedelta(
+        minutes=settings.RESET_TOKEN_EXPIRE_MINUTES
+    )
+    to_encode.update({"exp":expire})
+    return jwt.encode(to_encode,settings.SECRET_KEY,algorithm=settings.ALGORITHM)

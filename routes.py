@@ -1,12 +1,15 @@
-from fastapi import APIRouter,HTTPException,Depends
+from fastapi import APIRouter,HTTPException,Depends,BackgroundTasks
+import random
+import string
 from database import get_db
 from jose import jwt,JWTError
 from sqlalchemy.orm import Session
 from config import settings
 from models import User
-from auth import create_access_token,hash_password,verify_password,get_current_user
-from helpers import generate_otp,send_otp_email,correct_email
-from schemas import UserSchema,UserProfile,UserLogin,Token,VerifyOtp,ChangePass,ChangeEmail
+from datetime import datetime,timezone,timedelta
+from auth import create_access_token,hash_password,verify_password,get_current_user,create_reset_token
+from helpers import generate_otp,send_otp_email,correct_email,send_reset_instructions
+from schemas import UserSchema,UserProfile,UserLogin,Token,VerifyOtp,ChangePass,ChangeEmail,ForgotPass,ResetPass
 router=APIRouter()
 
 
@@ -68,6 +71,8 @@ def login(user:UserLogin,db:Session=Depends(get_db)):
 def get_profile(current_user:User=Depends(get_current_user)):
     return current_user
 
+
+
 @router.patch("/deactivate")
 def deactivate_acc(current_user:User=Depends(get_current_user),db:Session=Depends(get_db)):
     if current_user.is_Active==False:
@@ -77,6 +82,8 @@ def deactivate_acc(current_user:User=Depends(get_current_user),db:Session=Depend
     db.refresh(current_user)
     return {"message":"Successfully deactivated"}
 
+
+
 @router.patch("/activate")
 def activate_acc(email:str,db:Session=Depends(get_db)):
     db_user=db.query(User).filter(User.email==email).first()
@@ -84,6 +91,8 @@ def activate_acc(email:str,db:Session=Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     return {"message":"Successfully activated"}
+
+
 
 @router.post("/change-password")
 def change_pass(data: ChangePass,current_user: User = Depends(get_current_user),db: Session = Depends(get_db)):
@@ -93,13 +102,80 @@ def change_pass(data: ChangePass,current_user: User = Depends(get_current_user),
     db.commit()
     return {"message": "Password updated successfully"}
 
-@router.put("/change-email")
-def change_email(data:ChangeEmail,current_user:User=Depends(get_current_user),db:Session=Depends(get_db)):
-    if not correct_email(data.new_email):
-        raise HTTPException(status_code=400,detail="New email does not follow the required email format")
-    db_email=db.query(User).filter(User.email==data.new_email).first()
-    if db_email:
-        raise HTTPException(status_code=400,detail="New email already exists")
-    current_user.email=data.new_email
+
+@router.post("/request-change-email")
+def request_change_email(
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    db_email = db.query(User).filter(User.email == user.email).first()
+    if not db_email:
+        raise HTTPException(status_code=400, detail="this account is not exist!!")
+    if not user.is_Active:
+        raise HTTPException(status_code=400, detail="this account is deactivated!!")
+    otp = generate_otp()
+    db_email.otp = otp
     db.commit()
-    return {"message":"New email updated"}
+    db.refresh(db_email)
+    background_tasks.add_task(send_otp_email, user.email, otp)
+    return {"message": "For changing the email otp is generated SuccessFully!!"}
+ 
+ 
+@router.put("/change_email")
+def change_password(
+    new_info: ChangeEmail,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not correct_email(new_info.new_email):
+        raise HTTPException(status_code=400, detail="email is not validated!!")
+    db_email = db.query(User).filter(User.email == user.email).first()
+    if not db_email:
+        raise HTTPException(status_code=400, detail="Account does not exist!!")
+    if not user.is_Active:
+        raise HTTPException(status_code=400, detail="this account is deactivated!!")
+    if  (user.otp != new_info.otp):
+        raise HTTPException(status_code=400, detail="Wrong otp recieved!!")
+    user.email = new_info.new_email
+    token = create_access_token({"sub": new_info.new_email})
+    db.commit()
+    return {"email": "email is changed!!", "token": token}
+
+@router.post("/forgot-password")
+def forgot_pass(data:ForgotPass,db:Session=Depends(get_db)):
+    db_user=db.query(User).filter(User.email==data.email).first()
+    if not db_user:
+        raise HTTPException(status_code=400,detail="Email not found")
+    reset_token=create_reset_token(data={"sub":data.email})
+    db_user.reset_token=reset_token
+    
+    db_user.reset_token_expiry = datetime.now(timezone.utc) + timedelta(minutes=settings.RESET_TOKEN_EXPIRE_MINUTES)
+    db.commit()
+    db.refresh(db_user)
+    send_reset_instructions(data.email,reset_token)
+    return {"message":"If the account exists, reset instructions have been sent."}
+
+
+
+@router.post("/reset-password")
+def reset(data: ResetPass, db: Session = Depends(get_db)):
+
+    db_user = db.query(User).filter(User.email == data.email).first()
+    if not db_user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    if not db_user.reset_token:
+        raise HTTPException(status_code=400, detail="Token mismatch")
+
+    if not db_user.reset_token_expiry or db_user.reset_token_expiry < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Token expired")
+
+    db_user.password = hash_password(data.new_password)
+    db_user.reset_token = None
+    db_user.reset_token_expiry = None
+    db.commit()
+    db.refresh(db_user)
+
+    return {"message": "Password reset successfully"}
+
